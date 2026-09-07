@@ -27,6 +27,24 @@ test.describe('TG-6: Audit Lifecycle — Search and Load Existing Audit', () => 
   // Daily shakeout always tests against a SOC 2 Type 2 audit for deterministic results.
   const TARGET_FRAMEWORK = 'SOC 2 Type 2';
 
+  /**
+   * Assert the current tab/page is NOT showing a real error state.
+   *
+   * We must NOT use a bare getByText(/error/i): legitimate UI copy (e.g. evidence
+   * descriptions like "SaaS solutions are configured to generate error messages…")
+   * contains the word "error", which both (a) is a false positive and (b) resolves
+   * to multiple elements → strict-mode violation. Instead, look only for genuine
+   * error UI: an alert container, or a crash message ("500" / "something went wrong").
+   */
+  async function expectNoPageError(page: Page) {
+    // Real error surfaces: role=alert (toasts/error banners) or a crash headline.
+    const alertError = page.getByRole('alert');
+    const crashText = page.getByText(/\b500\b|something went wrong|internal server error/i);
+
+    await expect(alertError).toHaveCount(0, { timeout: 5000 });
+    await expect(crashText).toHaveCount(0, { timeout: 5000 });
+  }
+
   /** Helper: navigate to home and wait for audit tiles to load */
   async function goHomeAndWaitForAudits(page: Page) {
     // Use domcontentloaded, NOT networkidle. On staging/prod the home page keeps
@@ -161,8 +179,7 @@ test.describe('TG-6: Audit Lifecycle — Search and Load Existing Audit', () => 
     await dashboardTab.click();
     await page.waitForTimeout(1000);
 
-    const errorText = page.getByText(/error|500|something went wrong/i);
-    await expect(errorText).not.toBeVisible({ timeout: 5000 });
+    await expectNoPageError(page);
   });
 
   test('TC-8: Validate Workspace tab', async ({ page }) => {
@@ -176,8 +193,7 @@ test.describe('TG-6: Audit Lifecycle — Search and Load Existing Audit', () => 
 
     // Wait for workspace content to load (table or list)
     await expect(page.locator('main').first()).toBeVisible({ timeout: 30000 });
-    const errorText = page.getByText(/error|500|something went wrong/i);
-    await expect(errorText).not.toBeVisible({ timeout: 5000 });
+    await expectNoPageError(page);
   });
 
   test('TC-9: Validate Internal Audit tab', async ({ page }) => {
@@ -191,8 +207,7 @@ test.describe('TG-6: Audit Lifecycle — Search and Load Existing Audit', () => 
     // below has its own timeout. Avoid networkidle (hangs on background traffic).
     await page.waitForTimeout(1000);
 
-    const errorText = page.getByText(/error|500|something went wrong/i);
-    await expect(errorText).not.toBeVisible({ timeout: 5000 });
+    await expectNoPageError(page);
   });
 
   test('TC-10: Validate Document tab', async ({ page }) => {
@@ -204,8 +219,7 @@ test.describe('TG-6: Audit Lifecycle — Search and Load Existing Audit', () => 
     await docTab.click();
     await page.waitForTimeout(1000);
 
-    const errorText = page.getByText(/error|500|something went wrong/i);
-    await expect(errorText).not.toBeVisible({ timeout: 5000 });
+    await expectNoPageError(page);
   });
 
   test('TC-11: Validate Action Plan tab', async ({ page }) => {
@@ -217,8 +231,7 @@ test.describe('TG-6: Audit Lifecycle — Search and Load Existing Audit', () => 
     await apTab.click();
     await page.waitForTimeout(1000);
 
-    const errorText = page.getByText(/error|500|something went wrong/i);
-    await expect(errorText).not.toBeVisible({ timeout: 5000 });
+    await expectNoPageError(page);
   });
 
   test('TC-12: Dashboard — "controls accepted" tile visible', async ({ page }) => {
