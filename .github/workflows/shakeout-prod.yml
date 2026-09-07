@@ -6,6 +6,28 @@ on:
     - cron: '0 5 * * *'
   workflow_dispatch:
 
+  # Reusable workflow trigger — allows other repos in the 'quantarra' org
+  # (e.g. quantarra/project-atlas) to run the Prod shakeout via `uses:`.
+  # The caller must pass `secrets: inherit` so the secrets.* refs below resolve.
+  workflow_call:
+    secrets:
+      JIRA_API_TOKEN:
+        required: false
+      SMTP_HOST:
+        required: false
+      SMTP_PORT:
+        required: false
+      SMTP_USER:
+        required: false
+      SMTP_PASSWORD:
+        required: false
+      SHAKEOUT_REPORT_RECIPIENTS:
+        required: false
+      SLACK_WEBHOOK_URL:
+        required: false
+      JIRA_EMAIL:
+        required: false
+
 env:
   # Environment URLs (also in config/environments.json — env vars override if set)
   PROD_BASE_URL: https://app.quantarra.com
