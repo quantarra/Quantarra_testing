@@ -37,11 +37,30 @@ test.describe('TG-6: Audit Lifecycle — Search and Load Existing Audit', () => 
    * error UI: an alert container, or a crash message ("500" / "something went wrong").
    */
   async function expectNoPageError(page: Page) {
-    // Real error surfaces: role=alert (toasts/error banners) or a crash headline.
-    const alertError = page.getByRole('alert');
-    const crashText = page.getByText(/\b500\b|something went wrong|internal server error/i);
+    // NOTE: do NOT assert `getByRole('alert').toHaveCount(0)`. The app renders a
+    // persistent screen-reader live region (role="alert", aria-live="assertive",
+    // 1x1px, empty text) on every page — a global a11y announcer, NOT an error.
+    // It is present on all audit tabs, so a bare count(0) is a guaranteed false
+    // positive (this is what broke TC-7..TC-11). Only fail on an alert that
+    // actually carries visible error text.
+    const alerts = page.getByRole('alert');
+    const count = await alerts.count();
+    for (let i = 0; i < count; i++) {
+      const el = alerts.nth(i);
+      const text = ((await el.textContent().catch(() => '')) || '').trim();
 
-    await expect(alertError).toHaveCount(0, { timeout: 5000 });
+      // Skip the empty announcer live region — it has no text content.
+      if (text.length === 0) {
+        continue;
+      }
+
+      // A non-empty, visible alert is a real error banner/toast → fail loudly.
+      const visible = await el.isVisible().catch(() => false);
+      expect(visible, `Unexpected error alert on page: "${text.slice(0, 200)}"`).toBe(false);
+    }
+
+    // Genuine crash headline anywhere on the page is always a failure.
+    const crashText = page.getByText(/\b500\b|something went wrong|internal server error/i);
     await expect(crashText).toHaveCount(0, { timeout: 5000 });
   }
 
