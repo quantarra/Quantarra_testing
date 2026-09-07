@@ -1,20 +1,10 @@
-name: Daily Shakeout — POC & Prod
+name: Shakeout - POC Env.
 
 on:
   schedule:
     # 10:00 AM IST = 04:30 UTC — daily
     - cron: '30 4 * * *'
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Run against specific env (poc, prod, or both)'
-        required: false
-        default: 'both'
-        type: choice
-        options:
-          - both
-          - poc
-          - prod
 
 env:
   # Environment URLs (also in config/environments.json — env vars override if set)
@@ -22,11 +12,6 @@ env:
   POC_MC_URL: https://poc.quantarra.com:4002
   POC_AUDIT_URL: https://poc.quantarra.com:4003
   POC_API_URL: https://poc.quantarra.com/api/v1
-
-  PROD_BASE_URL: https://app.quantarra.com
-  PROD_MC_URL: https://mc.quantarra.com
-  PROD_AUDIT_URL: https://audit.quantarra.com
-  PROD_API_URL: https://app.quantarra.com/api/v1
 
   # Jira (token is the only real secret — rest is in environments.json)
   JIRA_BASE_URL: https://quantarra.atlassian.net
@@ -45,7 +30,6 @@ jobs:
   shakeout-poc:
     name: Shakeout — POC
     runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.environment != 'prod' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -86,54 +70,10 @@ jobs:
           path: Automation/reports/artifacts/
           retention-days: 7
 
-  shakeout-prod:
-    name: Shakeout — Prod
-    runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.environment != 'poc' }}
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: Automation/package-lock.json
-
-      - name: Install dependencies
-        working-directory: Automation
-        run: npm ci
-
-      - name: Install Playwright browsers
-        working-directory: Automation
-        run: npx playwright install chromium --with-deps
-
-      - name: Run Daily Shakeout — Prod
-        working-directory: Automation
-        env:
-          ENV: prod
-          PLAYWRIGHT_JSON_OUTPUT_FILE: reports/results.json
-        run: npx playwright test --project=daily-shakeout --reporter=list,json,html || true
-
-      - name: Upload Prod results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: shakeout-prod-results
-          path: Automation/reports/results.json
-          retention-days: 30
-
-      - name: Upload Prod screenshots
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: shakeout-prod-screenshots
-          path: Automation/reports/artifacts/
-          retention-days: 7
-
   report-and-notify:
     name: Consolidate Report & Notify
     runs-on: ubuntu-latest
-    needs: [shakeout-poc, shakeout-prod]
+    needs: [shakeout-poc]
     if: always()
     steps:
       - uses: actions/checkout@v5
@@ -154,14 +94,6 @@ jobs:
         with:
           name: shakeout-poc-results
           path: Automation/reports/poc
-        continue-on-error: true
-
-      - name: Download Prod results
-        if: ${{ needs.shakeout-prod.result == 'success' || needs.shakeout-prod.result == 'failure' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: shakeout-prod-results
-          path: Automation/reports/prod
         continue-on-error: true
 
       - name: Generate consolidated report & notify
