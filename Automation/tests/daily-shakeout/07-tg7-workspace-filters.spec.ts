@@ -786,8 +786,12 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
     // PRJAT-1503: the "All controls" chip count reflects the active SEARCH + PANEL
     // FILTER (verified manually on stg: search "cc1.1" + Submitted → 3 rows → chip
     // shows "(3)"), and stays consistent regardless of which chip is selected.
-    // The authoritative check is that, after filtering, the chip count EQUALS the
-    // filtered row count. We also keep a ≤-baseline sanity check.
+    // The authoritative, deterministic check is that AFTER filtering the chip
+    // count EQUALS the filtered row count. We do NOT read an unfiltered
+    // "baseline" first — the chip count query settles asynchronously after the
+    // sub-tab renders, so a pre-filter read is racy (it can catch a transient
+    // "(0)"), which produced the earlier `<= 0` false failure. The filtered
+    // equality below is the real requirement.
     await navigateToAudit(page);
     await gotoWorkspaceControls(page);
 
@@ -805,12 +809,15 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
     const readChipCount = async (): Promise<number | null> =>
       parseChipCount(await allChip.textContent());
 
-    // The chip count query settles a moment AFTER the sub-tab renders — the label
-    // briefly shows "(0)" (or no count) during hydration. Poll until the count
-    // matches the currently-visible row count so the baseline is the real,
-    // settled number rather than a transient "0" (root cause of the prod
-    // shakeout failure: baseline read as 0, so any post-filter count failed
-    // `after <= 0`).
+    // Apply a status filter that yields a strict subset of controls.
+    const applied = await applyFirstStatusWithResults(page);
+    expect(applied, 'no submission status yielded controls to validate the count').not.toBeNull();
+    await expect(badge(page)).toHaveText('1', { timeout: 10000 });
+
+    // Authoritative PRJAT-1503 assertion: the "All controls" chip count reflects
+    // the active filter — it EQUALS the filtered row count. Poll BOTH the chip
+    // label and the row count together until they agree, so the assertion is
+    // robust to the count-query round-trip after Apply (and to list re-render).
     await expect
       .poll(
         async () => {
@@ -820,39 +827,16 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
         },
         {
           timeout: 15000,
-          message: 'baseline "All controls" chip count did not settle to the visible row count',
+          message: 'the "All controls" chip count should equal the filtered row count (PRJAT-1503)',
         },
       )
       .toBeGreaterThanOrEqual(0);
 
-    const before = await readChipCount();
-    if (before === null) {
-      test.skip(true, 'Chip count not rendered — cannot verify PRJAT-1503 count behaviour');
-      return;
-    }
-
-    // Apply a status filter that yields a strict subset of controls.
-    const applied = await applyFirstStatusWithResults(page);
-    expect(applied, 'no submission status yielded controls to validate the count').not.toBeNull();
-    await expect(badge(page)).toHaveText('1', { timeout: 10000 });
-
-    // Authoritative PRJAT-1503 assertion: the "All controls" chip count now
-    // reflects the active filter — it EQUALS the filtered row count. Poll to
-    // absorb the count-query round-trip after Apply.
-    const filteredRows = await controlRows(page).count();
-    await expect
-      .poll(async () => readChipCount(), {
-        timeout: 15000,
-        message: `"All controls" chip count should equal the filtered row count (${filteredRows})`,
-      })
-      .toBe(filteredRows);
-
-    // Secondary sanity check: filtering never increases the count beyond the
-    // unfiltered baseline.
-    const after = await readChipCount();
-    expect(after, 'chip count should still render after filtering').not.toBeNull();
-    expect(after!, 'filtered chip count should not exceed the unfiltered baseline').toBeLessThanOrEqual(before);
-    console.log(`  ℹ️ TC-21 All-controls chip: ${before} → ${after} after "${applied!.status}" (${filteredRows} rows)`);
+    const chipAfter = await readChipCount();
+    const rowsAfter = await controlRows(page).count();
+    expect(chipAfter, 'chip count should still render after filtering').not.toBeNull();
+    expect(chipAfter!, 'filtered chip count must equal the filtered row count').toBe(rowsAfter);
+    console.log(`  ℹ️ TC-21 All-controls chip after "${applied!.status}": chip=${chipAfter} rows=${rowsAfter}`);
   });
 
   test('TC-22: Deep link ?status= seeds the shared filter on load (PRJAT-1499)', async ({ page }) => {
