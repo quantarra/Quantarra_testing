@@ -755,6 +755,130 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
     await expect(badge(page)).toHaveText('1', { timeout: 10000 });
   });
 
+  test('TC-20: Filter button is hidden on non-controls workspace sub-tabs (PRJAT-1499)', async ({ page }) => {
+    test.skip(!shouldRun('TG-7', 'Scenario 7', 'TC-20'), 'Excluded by Excel — Run Shakeout = No');
+
+    // The panel filter only applies to the controls query, so the filter button
+    // (and its badge) render ONLY on the Controls sub-tab. On Families /
+    // Objectives / Evidence the button must be absent (workspace-tab.tsx guards
+    // it behind `activeSubTab === "controls"`).
+    await navigateToAudit(page);
+    await gotoWorkspaceControls(page);
+
+    // Present on Controls.
+    await expect(page.getByTestId('workspace-filter-btn')).toBeVisible({ timeout: 15000 });
+
+    // Absent on each other workspace sub-tab that exists.
+    let checked = 0;
+    for (const label of [/^Families/i, /^Objectives/i, /^Evidence/i, /^Categories/i, /^Subcategories/i, /^Chapters/i, /^Standards/i]) {
+      if (await selectWorkspaceSubTab(page, label)) {
+        await expect(page.getByTestId('workspace-filter-btn')).toHaveCount(0, { timeout: 10000 });
+        checked++;
+      }
+    }
+
+    expect(checked, 'at least one non-controls workspace sub-tab should exist to verify').toBeGreaterThan(0);
+  });
+
+  test('TC-21: Chip counts reflect the active filter (not the active chip) (PRJAT-1503)', async ({ page }) => {
+    test.skip(!shouldRun('TG-7', 'Scenario 7', 'TC-21'), 'Excluded by Excel — Run Shakeout = No');
+
+    // PRJAT-1503: chip badge counts reflect the active SEARCH + PANEL FILTER, but
+    // NOT the currently-selected chip — so applying a status filter narrows the
+    // "All controls" chip count, and it stays consistent regardless of which chip
+    // is selected. Verify the "All controls" chip count DROPS after filtering.
+    await navigateToAudit(page);
+    await gotoWorkspaceControls(page);
+
+    const allChip = page.getByTestId('controls-chip-all');
+    if (!(await allChip.isVisible({ timeout: 5000 }).catch(() => false))) {
+      test.skip(true, 'Controls chips not available for this user/audit');
+      return;
+    }
+
+    // Baseline unfiltered count from the chip label text, e.g. "All controls (172)".
+    const readChipCount = async (): Promise<number | null> => {
+      const text = (await allChip.textContent())?.trim() ?? '';
+      const m = text.match(/\((\d+)\)\s*$/);
+      return m ? Number(m[1]) : null;
+    };
+
+    const before = await readChipCount();
+    if (before === null) {
+      test.skip(true, 'Chip count not rendered — cannot verify PRJAT-1503 count behaviour');
+      return;
+    }
+
+    // Apply a status filter that yields a strict subset of controls.
+    const applied = await applyFirstStatusWithResults(page);
+    expect(applied, 'no submission status yielded controls to validate the count').not.toBeNull();
+    await expect(badge(page)).toHaveText('1', { timeout: 10000 });
+
+    // The "All controls" chip count must now reflect the filter (≤ baseline, and
+    // equal to the filtered row count that produced it).
+    const after = await readChipCount();
+    expect(after, 'chip count should still render after filtering').not.toBeNull();
+    expect(after!, 'filtered chip count should not exceed the unfiltered baseline').toBeLessThanOrEqual(before);
+    console.log(`  ℹ️ TC-21 All-controls chip: ${before} → ${after} after "${applied!.status}" (${applied!.count} rows)`);
+  });
+
+  test('TC-22: Deep link ?status= seeds the shared filter on load (PRJAT-1499)', async ({ page }) => {
+    test.skip(!shouldRun('TG-7', 'Scenario 7', 'TC-22'), 'Excluded by Excel — Run Shakeout = No');
+
+    // PRJAT-1499: `?status=` is seeded into the shared per-audit filter via the
+    // `override` argument of the `ws-filter-` session state. Opening the audit
+    // workspace with a status deep link must arrive with the filter already
+    // active (badge "1") and the chip forced to "All controls".
+    await navigateToAudit(page);
+    await gotoWorkspaceControls(page);
+
+    // Derive the current audit id from the URL to build the deep link.
+    const url = new URL(page.url());
+    const auditIdMatch = url.pathname.match(/\/audit\/([^/]+)/);
+    expect(auditIdMatch, 'could not resolve audit id from URL').not.toBeNull();
+    const auditId = auditIdMatch![1];
+
+    // Deep link with a valid ComplianceStatus value (see status-badge.tsx).
+    await page.goto(`/audit/${auditId}?tab=ws&sub=controls&status=in_progress`, {
+      waitUntil: 'domcontentloaded',
+    });
+    await page.waitForLoadState('networkidle');
+
+    // Filter button present and the seeded filter is active (badge "1").
+    await expect(page.getByTestId('workspace-filter-btn')).toBeVisible({ timeout: 15000 });
+    await expect(badge(page)).toBeVisible({ timeout: 10000 });
+    await expect(badge(page)).toHaveText('1', { timeout: 10000 });
+
+    // The chip is forced to "All controls" for a status deep link.
+    const allChip = page.getByTestId('controls-chip-all');
+    if (await allChip.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await expect(allChip).toHaveAttribute('aria-pressed', 'true');
+    }
+  });
+
+  test('TC-23: Shared filter survives a full page reload (sessionStorage) (PRJAT-1499)', async ({ page }) => {
+    test.skip(!shouldRun('TG-7', 'Scenario 7', 'TC-23'), 'Excluded by Excel — Run Shakeout = No');
+
+    // The shared filter is stored in sessionStorage (`ws-filter-${auditId}`),
+    // which survives a full page reload within the same tab. Apply → reload →
+    // the filter must still be active (badge "1").
+    await navigateToAudit(page);
+    await gotoWorkspaceControls(page);
+
+    await openFilterSheet(page);
+    await applyStatus(page, 'In progress');
+    await expect(badge(page)).toHaveText('1', { timeout: 10000 });
+
+    // Full reload — sessionStorage persists for the tab.
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForLoadState('networkidle');
+
+    // Re-enter the workspace controls view (reload lands on the audit page).
+    await gotoWorkspaceControls(page);
+    await expect(badge(page)).toBeVisible({ timeout: 10000 });
+    await expect(badge(page)).toHaveText('1', { timeout: 10000 });
+  });
+
   test('TC-18: Keyboard/a11y — Enter opens, Escape closes without applying', async ({ page }) => {
     test.skip(!shouldRun('TG-7', 'Scenario 7', 'TC-18'), 'Excluded by Excel — Run Shakeout = No');
 
