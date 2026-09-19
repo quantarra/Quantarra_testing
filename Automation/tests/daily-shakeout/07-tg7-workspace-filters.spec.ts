@@ -6,15 +6,18 @@ import { getAdminSessionPath, getContributorSessionPath, checkGate } from './ses
  * Daily Shakeout — TG-7: Audit Workspace & Internal Auditor — Filter per sub-tab
  * (Scenario 7, TC-1..TC-17)
  *
- * Verifies the per-sub-tab filter behaviour introduced in the workspace redesign:
- *  - Each sub-tab (All controls, Controls I own, Needs updates, Due today/week/month)
- *    keeps its OWN filter value — switching tabs resets/isolates the filter.
- *  - "Owner" and "Function" filter fields appear ONLY on "All controls".
- *  - Filter persists across control open/back on the same sub-tab.
- *  - Internal Auditor tab sub-tabs (Ready for Review / Needs updated) have the
- *    same per-sub-tab isolation.
+ * Verifies the workspace filter behaviour. NOTE — the filter model changed:
+ *  - PRJAT-1212 (superseded): a separate filter per chip; switching chips reset it.
+ *  - PRJAT-1499/1503 (current): ONE panel filter per audit (`ws-filter-${auditId}`),
+ *    SHARED across all chips. Switching chips ("All controls", "Controls I own",
+ *    "Needs updates", "Due today/week/month") does NOT reset the filter — only the
+ *    free-text search is cleared on a sub-tab change. "Clear all" removes the shared
+ *    filter for the whole controls view.
+ *  - "Owner" and "Function" filter fields appear ONLY on the "All controls" chip.
+ *  - Filter persists across control open/back on the controls view.
+ *  - Internal Audit tab sub-tabs still isolate their own (Owner-based) filter.
  *  - Search / Filters / Add Control layout swap (new design).
- *  - Cross-audit isolation + Clear-all scoping + keyboard/a11y.
+ *  - Cross-audit isolation + keyboard/a11y.
  *
  * Feature flags: all TG-7 rows are "Run Shakeout in Prod and POC" = No
  * (regression-only until the feature ships to Prod). Each test is gated by
@@ -130,6 +133,27 @@ async function selectSubTab(page: Page, label: RegExp): Promise<boolean> {
   }
 
   await target.click();
+  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(500);
+  return true;
+}
+
+/**
+ * Select a WORKSPACE SUB-TAB (Families / Objectives / Controls / Evidence) by
+ * label. These are distinct from the filter CHIPS handled by selectSubTab():
+ * they live in the tablist with aria-label="Workspace sub-tabs" and are what
+ * `handleSubTabChange` reacts to (clears search, keeps filter). Returns false
+ * if the sub-tab is not present for this framework/audit.
+ */
+async function selectWorkspaceSubTab(page: Page, label: RegExp): Promise<boolean> {
+  const tablist = page.getByRole('tablist', { name: /workspace sub-tabs/i });
+  const tab = tablist.getByRole('tab', { name: label }).first();
+
+  if (!(await tab.isVisible({ timeout: 3000 }).catch(() => false))) {
+    return false;
+  }
+
+  await tab.click();
   await page.waitForLoadState('networkidle');
   await page.waitForTimeout(500);
   return true;
@@ -323,9 +347,14 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
     await expectAllRowsHaveStatus(page, applied!.status);
   });
 
-  test('TC-4: Filter resets on "Controls I own"; persists on return to All controls', async ({ page }) => {
+  test('TC-4: Filter persists across chips — ONE shared filter per audit (PRJAT-1499/1503)', async ({ page }) => {
     test.skip(!shouldRun('TG-7', 'Scenario 7', 'TC-4'), 'Excluded by Excel — Run Shakeout = No');
 
+    // Requirement change (PRJAT-1499/1503): the panel filter is stored ONCE per
+    // audit (`ws-filter-${auditId}`), NOT per chip. Switching chips ("All
+    // controls" ↔ "Controls I own") deliberately does NOT reset the filter —
+    // only the free-text search is cleared on a sub-tab change. This supersedes
+    // the old PRJAT-1212 per-chip-reset behaviour.
     await navigateToAudit(page);
     await gotoWorkspaceControls(page);
 
@@ -334,51 +363,50 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
     await applyStatus(page, 'In progress');
     await expect(badge(page)).toHaveText('1', { timeout: 10000 });
 
-    // Switch to "Controls I own" → filter should RESET (no badge).
+    // Switch to "Controls I own" → filter PERSISTS (badge still 1, shared filter).
     const switched = await selectSubTab(page, SUBTAB.controlsIOwn);
     if (!switched) {
-      test.skip(true, '"Controls I own" sub-tab not available in this environment');
+      test.skip(true, '"Controls I own" chip not available in this environment');
       return;
     }
-    await expect(badge(page)).toHaveCount(0, { timeout: 10000 });
+    await expect(badge(page)).toHaveText('1', { timeout: 10000 });
 
-    // Return to All controls → filter persists (badge 1 again).
+    // Return to All controls → same shared filter is still applied (badge 1).
     await selectSubTab(page, SUBTAB.allControls);
     await expect(badge(page)).toHaveText('1', { timeout: 10000 });
   });
 
-  test('TC-5: Each sub-tab keeps its own filter independently (no cross-contamination)', async ({ page }) => {
+  test('TC-5: Single shared filter is visible across all chips (no per-chip isolation) (PRJAT-1499/1503)', async ({ page }) => {
     test.skip(!shouldRun('TG-7', 'Scenario 7', 'TC-5'), 'Excluded by Excel — Run Shakeout = No');
 
+    // Requirement change (PRJAT-1499/1503): there is ONE panel filter per audit,
+    // shared by every chip. Applying it on "All controls" makes it active on
+    // "Controls I own" (and any other chip) too — the badge does NOT reset when
+    // switching chips. This replaces the old PRJAT-1212 per-chip isolation.
     await navigateToAudit(page);
     await gotoWorkspaceControls(page);
 
-    // All controls → "In progress".
+    // All controls → apply "In progress" (badge 1).
     await openFilterSheet(page);
     await applyStatus(page, 'In progress');
     await expect(badge(page)).toHaveText('1', { timeout: 10000 });
 
-    // Controls I own → "Submitted".
+    // Controls I own → the SAME shared filter is already active (badge 1, not 0).
     if (!(await selectSubTab(page, SUBTAB.controlsIOwn))) {
-      test.skip(true, '"Controls I own" sub-tab not available');
+      test.skip(true, '"Controls I own" chip not available');
       return;
     }
-    await expect(badge(page)).toHaveCount(0, { timeout: 10000 });
-    await openFilterSheet(page);
-    await applyStatus(page, 'Submitted');
     await expect(badge(page)).toHaveText('1', { timeout: 10000 });
 
-    // Visit other sub-tabs → they must show no inherited filter.
+    // Any other available chip also shows the shared filter as active (badge 1).
     for (const label of [SUBTAB.needsUpdates, SUBTAB.dueToday, SUBTAB.dueThisWeek, SUBTAB.dueThisMonth]) {
       if (await selectSubTab(page, label)) {
-        await expect(badge(page)).toHaveCount(0, { timeout: 10000 });
+        await expect(badge(page)).toHaveText('1', { timeout: 10000 });
       }
     }
 
-    // All controls retains "In progress"; Controls I own retains "Submitted".
+    // Back on All controls → still the same shared filter (badge 1).
     await selectSubTab(page, SUBTAB.allControls);
-    await expect(badge(page)).toHaveText('1', { timeout: 10000 });
-    await selectSubTab(page, SUBTAB.controlsIOwn);
     await expect(badge(page)).toHaveText('1', { timeout: 10000 });
   });
 
@@ -614,25 +642,27 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
     await expect(badge(page)).toHaveCount(0, { timeout: 10000 });
   });
 
-  test('TC-17: Clear all clears only the current sub-tab', async ({ page }) => {
+  test('TC-17: Clear all clears the single shared filter for the whole controls view (PRJAT-1499/1503)', async ({ page }) => {
     test.skip(!shouldRun('TG-7', 'Scenario 7', 'TC-17'), 'Excluded by Excel — Run Shakeout = No');
 
+    // Requirement change (PRJAT-1499/1503): there is ONE shared filter per audit,
+    // so "Clear all" removes it for the entire controls view — not just the
+    // active chip. After clearing on "All controls", "Controls I own" is also
+    // clear (badge gone). This replaces the old PRJAT-1212 per-chip clear.
     await navigateToAudit(page);
     await gotoWorkspaceControls(page);
 
-    // All controls → In progress.
+    // All controls → apply "In progress" (badge 1, shared filter).
     await selectSubTab(page, SUBTAB.allControls);
     await openFilterSheet(page);
     await applyStatus(page, 'In progress');
     await expect(badge(page)).toHaveText('1', { timeout: 10000 });
 
-    // Controls I own → Submitted.
+    // Controls I own → same shared filter is already active (badge 1).
     if (!(await selectSubTab(page, SUBTAB.controlsIOwn))) {
-      test.skip(true, '"Controls I own" sub-tab not available');
+      test.skip(true, '"Controls I own" chip not available');
       return;
     }
-    await openFilterSheet(page);
-    await applyStatus(page, 'Submitted');
     await expect(badge(page)).toHaveText('1', { timeout: 10000 });
 
     // Back on All controls → Clear all → Apply.
@@ -642,9 +672,86 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
     await sheet(page).getByRole('button', { name: /apply filter/i }).click();
     await expect(page.getByRole('dialog')).toBeHidden({ timeout: 10000 });
 
-    // All controls badge gone; Controls I own filter unaffected.
+    // Shared filter cleared everywhere: no badge on All controls…
     await expect(badge(page)).toHaveCount(0, { timeout: 10000 });
+    // …and no badge on Controls I own either (it shared the same filter).
     await selectSubTab(page, SUBTAB.controlsIOwn);
+    await expect(badge(page)).toHaveCount(0, { timeout: 10000 });
+  });
+
+  test('TC-19: Switching workspace sub-tabs keeps the filter but clears the search (PRJAT-1499)', async ({ page }) => {
+    test.skip(!shouldRun('TG-7', 'Scenario 7', 'TC-19'), 'Excluded by Excel — Run Shakeout = No');
+
+    // PRJAT-1499 contract (handleSubTabChange): changing the WORKSPACE sub-tab
+    // (Controls → Evidence → Controls) clears only the free-text SEARCH — the
+    // panel FILTER is deliberately retained (it is stored once per audit and
+    // only applies to the controls query). Assert both halves.
+    await navigateToAudit(page);
+    await gotoWorkspaceControls(page);
+
+    // On Controls: apply a status filter (badge 1) AND type a search term.
+    await openFilterSheet(page);
+    await applyStatus(page, 'In progress');
+    await expect(badge(page)).toHaveText('1', { timeout: 10000 });
+
+    const searchBox = page
+      .locator('#tabpanel-ws input[placeholder*="Search"], #tabpanel-ws input[type="search"]')
+      .first();
+    await expect(searchBox).toBeVisible({ timeout: 10000 });
+    await searchBox.fill('policy');
+    await expect(searchBox).toHaveValue('policy');
+
+    // Switch to the "Evidence" workspace sub-tab (always present), then back to
+    // Controls. Use the workspace sub-tab tablist (role=tab within the
+    // "Workspace sub-tabs" tablist) — NOT the chip row or the audit-level tabs.
+    if (!(await selectWorkspaceSubTab(page, /^Evidence/i))) {
+      test.skip(true, '"Evidence" workspace sub-tab not available');
+      return;
+    }
+    if (!(await selectWorkspaceSubTab(page, /^(Controls|Safeguards|Requirements|Elements)/i))) {
+      test.skip(true, 'Controls workspace sub-tab not available on return');
+      return;
+    }
+
+    // Filter is retained (badge still 1)…
+    await expect(badge(page)).toHaveText('1', { timeout: 10000 });
+    // …but the search was cleared on the sub-tab change.
+    const searchBoxAfter = page
+      .locator('#tabpanel-ws input[placeholder*="Search"], #tabpanel-ws input[type="search"]')
+      .first();
+    await expect(searchBoxAfter).toHaveValue('');
+  });
+
+  test('TC-19b: Filter persists after navigating to Policies and back to the SAME audit (PRJAT-1499)', async ({ page }) => {
+    test.skip(!shouldRun('TG-7', 'Scenario 7', 'TC-19'), 'Excluded by Excel — Run Shakeout = No');
+
+    // Persistence guarantee: the shared filter lives in sessionStorage keyed by
+    // `ws-filter-${auditId}` (survives client-side navigation, resets only on
+    // tab close). Leaving the audit entirely (to /policies) and returning to the
+    // SAME audit's workspace must retain the filter. (Cross-AUDIT isolation is a
+    // separate concern — see TC-16.)
+    await navigateToAudit(page);
+
+    // Capture the current audit URL so we return to the SAME audit.
+    await gotoWorkspaceControls(page);
+    const auditUrl = page.url();
+
+    // Apply a filter on Controls (badge 1).
+    await openFilterSheet(page);
+    await applyStatus(page, 'In progress');
+    await expect(badge(page)).toHaveText('1', { timeout: 10000 });
+
+    // Navigate away to Policies (a different top-level area).
+    await page.goto('/policies', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1000);
+    expect(page.url()).toContain('/policies');
+
+    // Return to the SAME audit's Workspace → Controls.
+    await page.goto(auditUrl, { waitUntil: 'domcontentloaded' });
+    await gotoWorkspaceControls(page);
+
+    // Shared per-audit filter is retained: badge still shows "1".
+    await expect(badge(page)).toBeVisible({ timeout: 10000 });
     await expect(badge(page)).toHaveText('1', { timeout: 10000 });
   });
 
