@@ -783,43 +783,157 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
   test('TC-21: Chip counts reflect the active filter (not the active chip) (PRJAT-1503)', async ({ page }) => {
     test.skip(!shouldRun('TG-7', 'Scenario 7', 'TC-21'), 'Excluded by Excel — Run Shakeout = No');
 
-    // PRJAT-1503: chip badge counts reflect the active SEARCH + PANEL FILTER, but
-    // NOT the currently-selected chip — so applying a status filter narrows the
-    // "All controls" chip count, and it stays consistent regardless of which chip
-    // is selected. Verify the "All controls" chip count DROPS after filtering.
+    // PRJAT-1503: After a filter is applied, the label "(N)" on EACH chip must
+    // equal the number of control rows visible when that chip is active.
+    // The filter is SHARED across all control chips — so the count on each chip
+    // reflects the intersection of [that chip's own scope] + [the active filter].
+    //
+    // Validation strategy per chip:
+    //   1. Click the chip
+    //   2. Wait for the row list to settle
+    //   3. Poll until chip label count == visible row count (handles async re-query)
+    //   4. Assert equality
+    //
+    // Evidence chip rule (per product spec):
+    //   - Switching TO the Evidence sub-tab resets the search box
+    //   - Switching BACK from Evidence to a control chip: search stays cleared,
+    //     but the panel filter is retained (badge still shows)
+    //   - Evidence chip itself does NOT carry a "(N)" count driven by the filter —
+    //     it is skipped in the count-match loop below.
+
     await navigateToAudit(page);
     await gotoWorkspaceControls(page);
 
+    // Verify chips are present at all before proceeding.
     const allChip = page.getByTestId('controls-chip-all');
     if (!(await allChip.isVisible({ timeout: 5000 }).catch(() => false))) {
       test.skip(true, 'Controls chips not available for this user/audit');
       return;
     }
 
-    // Baseline unfiltered count from the chip label text, e.g. "All controls (172)".
-    const readChipCount = async (): Promise<number | null> => {
-      const text = (await allChip.textContent())?.trim() ?? '';
-      const m = text.match(/\((\d+)\)\s*$/);
-      return m ? Number(m[1]) : null;
-    };
-
-    const before = await readChipCount();
-    if (before === null) {
-      test.skip(true, 'Chip count not rendered — cannot verify PRJAT-1503 count behaviour');
-      return;
-    }
-
-    // Apply a status filter that yields a strict subset of controls.
+    // Apply a status filter that yields a strict subset of controls, so every
+    // chip will show a count < total. This also confirms the filter is active.
     const applied = await applyFirstStatusWithResults(page);
     expect(applied, 'no submission status yielded controls to validate the count').not.toBeNull();
     await expect(badge(page)).toHaveText('1', { timeout: 10000 });
+    console.log(`  ℹ️ TC-21 using status filter "${applied!.status}"`);
 
-    // The "All controls" chip count must now reflect the filter (≤ baseline, and
-    // equal to the filtered row count that produced it).
-    const after = await readChipCount();
-    expect(after, 'chip count should still render after filtering').not.toBeNull();
-    expect(after!, 'filtered chip count should not exceed the unfiltered baseline').toBeLessThanOrEqual(before);
-    console.log(`  ℹ️ TC-21 All-controls chip: ${before} → ${after} after "${applied!.status}" (${applied!.count} rows)`);
+    // Parse "(N)" suffix from chip label text, e.g. "All controls (172)" → 172.
+    const parseChipCount = (text: string | null): number | null => {
+      const m = (text ?? '').trim().match(/\((\d+)\)\s*$/);
+      return m ? Number(m[1]) : null;
+    };
+
+    // Chips to validate: testId → human label (for logging).
+    // Source of truth: filter-chips.tsx FilterChipKey + testIdPrefix="controls-chip"
+    // Rule: underscores in key → hyphens in testid (key.replace(/_/g, '-'))
+    // Evidence chip is intentionally excluded — its search resets on navigation
+    // and it does not maintain the filter-driven count.
+    const CHIPS: Array<{ testId: string; label: string }> = [
+      { testId: 'controls-chip-all',              label: 'All controls'      },
+      { testId: 'controls-chip-mine',              label: 'Controls I own'   },
+      { testId: 'controls-chip-delegated-to-me',   label: 'Delegated to me'  },
+      { testId: 'controls-chip-needs-updates',     label: 'Needs updates'    },
+      { testId: 'controls-chip-due-today',         label: 'Due today'        },
+      { testId: 'controls-chip-due-this-week',     label: 'Due this week'    },
+      { testId: 'controls-chip-due-this-month',    label: 'Due this month'   },
+    ];
+
+    let chipsChecked = 0;
+
+    for (const chip of CHIPS) {
+      const chipLocator = page.getByTestId(chip.testId);
+
+      // Skip chips that are not rendered for this audit/user.
+      if (!(await chipLocator.isVisible({ timeout: 3000 }).catch(() => false))) {
+        console.log(`  ⚠️ TC-21 chip "${chip.label}" not present — skipping`);
+        continue;
+      }
+
+      // Click the chip to make it active and wait for the list to re-query.
+      await chipLocator.click();
+      await page.waitForLoadState('networkidle');
+      await page.waitForTimeout(500);
+
+      // Poll until BOTH the chip label count AND the visible row count agree.
+      // This handles the async count-query round-trip that fires after Apply.
+      const result = await expect
+        .poll(
+          async () => {
+            const labelCount = parseChipCount(await chipLocator.textContent());
+            const rowCount   = await controlRows(page).count();
+            // Return the agreed value when they match, or -1 to keep polling.
+            return labelCount !== null && labelCount === rowCount ? labelCount : -1;
+          },
+          {
+            timeout: 15000,
+            message: `chip "${chip.label}" label count should equal its visible row count (PRJAT-1503)`,
+          },
+        )
+        .toBeGreaterThanOrEqual(0)
+        .catch((e) => { throw e; });
+
+      // Final hard assertion: label == rows (belt-and-suspenders after poll).
+      const labelCount = parseChipCount(await chipLocator.textContent());
+      const rowCount   = await controlRows(page).count();
+      expect(
+        labelCount,
+        `chip "${chip.label}" label count must not be null after filter`,
+      ).not.toBeNull();
+      expect(
+        labelCount!,
+        `chip "${chip.label}" label count (${labelCount}) must equal visible row count (${rowCount})`,
+      ).toBe(rowCount);
+
+      console.log(`  ✅ TC-21 chip "${chip.label}": label=(${labelCount}) rows=${rowCount}`);
+      chipsChecked++;
+    }
+
+    expect(chipsChecked, 'at least one chip must be present to validate TC-21').toBeGreaterThan(0);
+
+    // After cycling through chips, verify the filter badge is still active —
+    // navigating between chips must NOT clear the shared filter.
+    await expect(badge(page), 'filter badge must still be visible after switching chips').toBeVisible({ timeout: 10000 });
+    await expect(badge(page), 'filter badge must still show "1" after switching chips').toHaveText('1');
+
+    // Evidence sub-tab behaviour: switching to Evidence resets the search box
+    // but the panel filter is retained. Verify the filter badge survives.
+    const evidenceSubTab = page
+      .getByRole('tablist', { name: /workspace sub-tabs/i })
+      .getByRole('tab', { name: /^Evidence/i })
+      .first();
+    if (await evidenceSubTab.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await evidenceSubTab.click();
+      await page.waitForLoadState('networkidle');
+
+      // Return to Controls sub-tab.
+      const controlsSubTab = page
+        .getByRole('tablist', { name: /workspace sub-tabs/i })
+        .getByRole('tab', { name: /^(Controls|Safeguards|Requirements|Elements)/i })
+        .first();
+      if (await controlsSubTab.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await controlsSubTab.click();
+        await page.waitForLoadState('networkidle');
+      }
+
+      // Filter retained, search cleared (badge still "1").
+      await expect(
+        badge(page),
+        'panel filter must be retained after Evidence sub-tab round-trip',
+      ).toHaveText('1', { timeout: 10000 });
+
+      const searchBox = page
+        .locator('#tabpanel-ws input[placeholder*="Search"], #tabpanel-ws input[type="search"]')
+        .first();
+      if (await searchBox.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await expect(
+          searchBox,
+          'search box must be cleared after Evidence sub-tab round-trip',
+        ).toHaveValue('');
+      }
+
+      console.log('  ✅ TC-21 Evidence round-trip: filter retained, search cleared');
+    }
   });
 
   test('TC-22: Deep link ?status= seeds the shared filter on load (PRJAT-1499)', async ({ page }) => {
