@@ -139,6 +139,8 @@ jobs:
     steps:
       - name: Checkout QA automation code
         uses: actions/checkout@v5
+        with:
+          ref: main
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
