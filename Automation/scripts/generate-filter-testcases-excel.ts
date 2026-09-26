@@ -174,7 +174,7 @@ const detailRows: DetailRow[] = [
   },
 ];
 
-// ── Regression-sheet rows (shouldRun() compatible) ──────────────────────────
+// ── Web App Regression sheet rows (shouldRun() compatible) ──────────────────
 // Loader reads: 'Test group', 'Test scenario/Test case/Test step', 'Test case',
 // 'Run for Smoketest in prod', 'Run for Smoketest in POC', 'Run for Full regression'.
 // A scenario header row uses "Scenario N" in the 'Test case' column; each TC row
@@ -204,8 +204,8 @@ async function generate(): Promise<void> {
   ws.getColumn('subTab').alignment = { wrapText: true, vertical: 'top' };
   ws.getColumn('testCase').alignment = { wrapText: true, vertical: 'top' };
 
-  // Sheet 2 — Regression (shouldRun-compatible)
-  const reg = wb.addWorksheet('Regression');
+  // Sheet 2 — Web App Regression (shouldRun-compatible)
+  const reg = wb.addWorksheet('Web App Regression');
   reg.columns = [
     { header: 'Test group', key: 'tg', width: 12 },
     { header: 'Test scenario/Test case/Test step', key: 'desc', width: 70 },

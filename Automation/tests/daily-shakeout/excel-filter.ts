@@ -1,7 +1,7 @@
 /**
  * Excel-Driven Test Filter
  *
- * Reads "tests/New_Testcase.xlsx" → "Regression" sheet and checks one of:
+ * Reads "tests/New_Testcase.xlsx" → "Web App Regression" sheet and checks one of:
  *   - "Run for Smoketest in prod"  (daily shakeout on PROD)
  *   - "Run for Smoketest in POC"   (daily shakeout on POC / staging)
  *   - "Run for Full regression"    (regression runs)
@@ -99,10 +99,12 @@ function loadExcelData(): TestCaseEntry[] {
     const XLSX = require('xlsx');
     const excelPath = path.resolve(__dirname, '..', 'New_Testcase.xlsx');
     const wb = XLSX.readFile(excelPath);
-    const ws = wb.Sheets['Regression'];
+    // Sheet was renamed "Regression" → "Web App Regression"; fall back to the
+    // legacy name for backward compatibility with older workbooks.
+    const ws = wb.Sheets['Web App Regression'] || wb.Sheets['Regression'];
 
     if (!ws) {
-      console.warn('[excel-filter] Sheet "Regression" not found — all tests will run.');
+      console.warn('[excel-filter] Sheet "Web App Regression" not found — all tests will run.');
       _cache = [];
       return _cache;
     }

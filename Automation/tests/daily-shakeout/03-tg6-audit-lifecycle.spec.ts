@@ -2,7 +2,8 @@ import { test, expect, type Page } from '@playwright/test';
 import { dismissWizard } from '../../src/helpers/auth';
 import { getShakeoutAdmin } from './test-data';
 import { shouldRun } from './excel-filter';
-import { getAdminSessionPath, checkGate } from './session-setup';
+import { getAdminSessionPath, checkGate, refreshAdminSession } from './session-setup';
+import * as fs from 'fs';
 
 /**
  * Daily Shakeout — TG-6: Audit Lifecycle — Search and Load Existing Audit
@@ -71,9 +72,49 @@ test.describe('TG-6: Audit Lifecycle — Search and Load Existing Audit', () => 
     // can hang until the 60s timeout even after the page is fully usable. Wait
     // for the audit tiles to render instead — that is the real "ready" signal.
     await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+    // On a long Prod run the reused storageState can expire server-side; the app
+    // then redirects home → /login and no audit tile ever appears. Detect that
+    // explicitly (instead of a misleading 30s "tile not found") and recover by
+    // re-logging-in and re-applying fresh cookies to this context.
+    await recoverIfLoggedOut(page);
+
     const auditLink = page.locator('a[href*="/audit/"]').first();
-    await expect(auditLink).toBeVisible({ timeout: 30000 });
+    const appeared = await auditLink.isVisible({ timeout: 15000 }).catch(() => false);
+
+    if (!appeared) {
+      // One reload covers a slow Prod tile API before we give up.
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await recoverIfLoggedOut(page);
+      await expect(auditLink).toBeVisible({ timeout: 20000 });
+    }
+
     return auditLink;
+  }
+
+  /**
+   * If the current page is the login screen (expired shared session), refresh
+   * the admin session, inject the fresh cookies into this context, and reload
+   * home. No-op when already authenticated.
+   */
+  async function recoverIfLoggedOut(page: Page) {
+    const onLogin =
+      /\/login/.test(page.url()) ||
+      (await page.locator('input[type="password"]').first().isVisible({ timeout: 2000 }).catch(() => false));
+
+    if (!onLogin) {
+      return;
+    }
+
+    console.log('  🔄 Home redirected to /login — session expired mid-run. Re-authenticating...');
+    const sessionPath = await refreshAdminSession();
+    const state = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
+
+    if (Array.isArray(state.cookies) && state.cookies.length > 0) {
+      await page.context().addCookies(state.cookies);
+    }
+
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
   }
 
   /**
