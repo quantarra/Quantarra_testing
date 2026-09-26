@@ -1,6 +1,6 @@
 /**
  * One-off: Replace Scenario 7 (Audit workspace Filters) in the main regression
- * suite (tests/New_Testcase.xlsx → "Regression" sheet) with the expanded
+ * suite (tests/New_Testcase.xlsx → "Web App Regression" sheet) with the expanded
  * per-sub-tab filter acceptance-criteria test cases.
  *
  * - Removes the existing Scenario 7 header + TG-7 TC rows.
@@ -24,7 +24,7 @@ import ExcelJS from 'exceljs';
 import * as path from 'path';
 
 const EXCEL_PATH = path.resolve(__dirname, '../tests/New_Testcase.xlsx');
-const SHEET = 'Regression';
+const SHEET = 'Web App Regression';
 const TEST_GROUP = 'TG-7';
 const SCENARIO_TITLE = 'Audit Workspace & Internal Auditor - Filter per sub-tab';
 
@@ -156,7 +156,7 @@ async function run(): Promise<void> {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(EXCEL_PATH);
 
-  const ws = wb.getWorksheet(SHEET);
+  const ws = wb.getWorksheet(SHEET) || wb.getWorksheet('Regression');
   if (!ws) {
     throw new Error(`Sheet "${SHEET}" not found`);
   }
