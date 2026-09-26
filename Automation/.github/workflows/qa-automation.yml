@@ -288,4 +288,4 @@ jobs:
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📋 *Test inclusion controlled by \`tests/New_Testcase.xlsx\` → \"Run Shakeout in Prod and POC\" column*" >> $GITHUB_STEP_SUMMARY
+          echo "📋 *Test inclusion controlled by \`tests/New_Testcase.xlsx\` → \"Run for Smoketest in prod\" (Prod) / \"Run for Smoketest in POC\" (POC/staging) column*" >> $GITHUB_STEP_SUMMARY

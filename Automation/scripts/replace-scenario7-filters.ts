@@ -16,7 +16,7 @@
  *   F Run for Full regression
  *   G Run for Smoketest in prod
  *   H Console Error Validated
- *   I Run Shakeout in Prod and POC
+ *   I Run for Smoketest in POC
  *   J Last Validated
  */
 
@@ -35,12 +35,12 @@ interface NewCase {
   identifier: string; // col D (xpath/selector hint)
 }
 
-// Feature not yet on Prod → regression-only. Match prior TG-7 flags.
+// Feature not yet on Prod/POC → regression-only. Match prior TG-7 flags.
 const FLAGS = {
   fullRegression: 'Yes',
   smokeProd: 'No',
   consoleError: 'No',
-  shakeout: 'No',
+  smokePoc: 'No',
 };
 
 const cases: NewCase[] = [
@@ -198,7 +198,7 @@ async function run(): Promise<void> {
       FLAGS.fullRegression,
       FLAGS.smokeProd,
       FLAGS.consoleError,
-      FLAGS.shakeout,
+      FLAGS.smokePoc,
       '',
     ]);
   }
