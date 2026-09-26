@@ -67,29 +67,65 @@ test.describe('TG-6: Audit Lifecycle — Search and Load Existing Audit', () => 
 
   /** Helper: navigate to home and wait for audit tiles to load */
   async function goHomeAndWaitForAudits(page: Page) {
-    // Use domcontentloaded, NOT networkidle. On staging/prod the home page keeps
-    // background traffic (analytics/websocket/AI-context) alive, so networkidle
-    // can hang until the 60s timeout even after the page is fully usable. Wait
-    // for the audit tiles to render instead — that is the real "ready" signal.
-    await page.goto('/', { waitUntil: 'domcontentloaded' });
-
-    // On a long Prod run the reused storageState can expire server-side; the app
-    // then redirects home → /login and no audit tile ever appears. Detect that
-    // explicitly (instead of a misleading 30s "tile not found") and recover by
-    // re-logging-in and re-applying fresh cookies to this context.
-    await recoverIfLoggedOut(page);
-
+    // Explicit wait strategy for the home page audit tiles.
+    //
+    // We do NOT use networkidle: on staging/prod the home page keeps background
+    // traffic (analytics/websocket/AI-context) alive, so networkidle hangs until
+    // timeout even when the page is usable. Instead we poll for the audit tile —
+    // the real "ready" signal — across up to 3 attempts (reload between them),
+    // recovering the session if the app redirected us to /login. Total budget is
+    // Prod-appropriate (~3 × 20s). On final failure we log the actual page state
+    // (url / login form / tile count / title) so failures are diagnosable rather
+    // than a bare "element not found".
     const auditLink = page.locator('a[href*="/audit/"]').first();
-    const appeared = await auditLink.isVisible({ timeout: 15000 }).catch(() => false);
+    const MAX_ATTEMPTS = 3;
+    const PER_ATTEMPT_TIMEOUT = 20000;
 
-    if (!appeared) {
-      // One reload covers a slow Prod tile API before we give up.
-      await page.reload({ waitUntil: 'domcontentloaded' });
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+      // If the session expired server-side the app redirects home → /login and
+      // no tile can ever appear. Recover (re-auth + re-inject cookies) first.
       await recoverIfLoggedOut(page);
-      await expect(auditLink).toBeVisible({ timeout: 20000 });
+
+      const appeared = await auditLink
+        .waitFor({ state: 'visible', timeout: PER_ATTEMPT_TIMEOUT })
+        .then(() => true)
+        .catch(() => false);
+
+      if (appeared) {
+        return auditLink;
+      }
+
+      console.log(`  ⏳ Audit tiles not visible yet (attempt ${attempt}/${MAX_ATTEMPTS}) — retrying...`);
     }
 
+    // All attempts exhausted — dump page state so the failure is diagnosable.
+    await logHomePageState(page);
+    await expect(auditLink, 'Audit tiles never rendered on home page (see diagnostics above)').toBeVisible({ timeout: 5000 });
+
     return auditLink;
+  }
+
+  /** Log the current home-page state to make tile-not-found failures diagnosable. */
+  async function logHomePageState(page: Page) {
+    const url = page.url();
+    const onLogin = await page
+      .locator('input[type="password"]')
+      .first()
+      .isVisible({ timeout: 1000 })
+      .catch(() => false);
+    const tileCount = await page.locator('a[href*="/audit/"]').count().catch(() => -1);
+    const title = await page.title().catch(() => '(unknown)');
+    const hasSpinner = await page
+      .locator('[class*="spinner"], [class*="loading"], [role="progressbar"]')
+      .first()
+      .isVisible({ timeout: 500 })
+      .catch(() => false);
+
+    console.log(
+      `  🔎 Home page state: url="${url}" | loginForm=${onLogin} | auditTiles=${tileCount} | spinner=${hasSpinner} | title="${title}"`,
+    );
   }
 
   /**
