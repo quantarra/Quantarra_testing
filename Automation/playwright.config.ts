@@ -42,6 +42,10 @@ export default defineConfig({
       testIgnore: '00-auth-setup.spec.ts',
       dependencies: ['auth-setup'],
       fullyParallel: false,
+      // Heavy TG-6/TG-7 tests navigate home → audit → workspace → scroll every
+      // control chip on Prod (slow, lazy-rendered lists). The default 60s cap is
+      // too tight once the home-tile wait + full-list scrolling are included.
+      timeout: 120000,
       retries: 2,
       workers: 1,
       use: {

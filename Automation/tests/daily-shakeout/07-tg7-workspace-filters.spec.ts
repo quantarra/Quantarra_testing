@@ -143,7 +143,7 @@ async function navigateToAudit(page: Page, framework = TARGET_FRAMEWORK, nth = 0
     .first();
   if (await searchBox.isVisible({ timeout: 5000 }).catch(() => false)) {
     await searchBox.fill(framework);
-    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(800); // settle (networkidle hangs on Prod background traffic)
     await page.waitForTimeout(1000);
   }
 
@@ -156,7 +156,7 @@ async function navigateToAudit(page: Page, framework = TARGET_FRAMEWORK, nth = 0
 
   await target.click();
   await page.waitForURL(/\/audit\//, { timeout: 30000, waitUntil: 'domcontentloaded' });
-  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(800); // settle (networkidle hangs on Prod background traffic)
   await expect(page.getByRole('tab').first()).toBeVisible({ timeout: 30000 });
 }
 
@@ -164,7 +164,7 @@ async function navigateToAudit(page: Page, framework = TARGET_FRAMEWORK, nth = 0
 async function gotoWorkspaceControls(page: Page): Promise<void> {
   const workspaceTab = page.getByRole('tab', { name: /audit workspace|workspace/i });
   await workspaceTab.click();
-  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(800); // settle (networkidle hangs on Prod background traffic)
 
   const wsPanel = page.locator('#tabpanel-ws');
   await expect(wsPanel).toBeVisible({ timeout: 15000 });
@@ -172,7 +172,7 @@ async function gotoWorkspaceControls(page: Page): Promise<void> {
   const controlsSubTab = wsPanel.locator('text=/Controls|Requirements/i').first();
   if (await controlsSubTab.isVisible({ timeout: 5000 }).catch(() => false)) {
     await controlsSubTab.click();
-    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(800); // settle (networkidle hangs on Prod background traffic)
   }
 
   await expect(page.getByTestId('workspace-filter-btn')).toBeVisible({ timeout: 15000 });
@@ -181,6 +181,31 @@ async function gotoWorkspaceControls(page: Page): Promise<void> {
 /** Locator for control rows in the workspace panel. */
 function controlRows(page: Page) {
   return page.locator('#tabpanel-ws a[href*="/control/"]');
+}
+
+/**
+ * The workspace control list renders ALL matching controls, but lazily — rows
+ * are added to the DOM as you scroll. A plain controlRows().count() therefore
+ * only sees the first screenful. This scrolls the last row into view repeatedly
+ * until the row count stops growing (fully loaded), then returns the final
+ * count. Bounded so it can never hang.
+ */
+async function countAllControlRows(page: Page): Promise<number> {
+  const rows = controlRows(page);
+  let prev = -1;
+  let current = await rows.count();
+  const MAX_SCROLLS = 40;
+
+  for (let i = 0; i < MAX_SCROLLS && current !== prev; i++) {
+    prev = current;
+    await rows.last().scrollIntoViewIfNeeded().catch(() => {});
+    // Brief settle for the next lazy batch to attach. No networkidle (hangs on
+    // Prod background traffic).
+    await page.waitForTimeout(400);
+    current = await rows.count();
+  }
+
+  return current;
 }
 
 /**
@@ -199,7 +224,7 @@ async function selectSubTab(page: Page, label: RegExp): Promise<boolean> {
   }
 
   await target.click();
-  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(800); // settle (networkidle hangs on Prod background traffic)
   await page.waitForTimeout(500);
   return true;
 }
@@ -220,7 +245,7 @@ async function selectWorkspaceSubTab(page: Page, label: RegExp): Promise<boolean
   }
 
   await tab.click();
-  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(800); // settle (networkidle hangs on Prod background traffic)
   await page.waitForTimeout(500);
   return true;
 }
@@ -592,7 +617,7 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
     await expect(firstControl).toBeVisible({ timeout: 10000 });
     await firstControl.click();
     await page.waitForURL(/\/control\//, { timeout: 15000, waitUntil: 'domcontentloaded' });
-    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(800); // settle (networkidle hangs on Prod background traffic)
 
     // Use the in-app "Back" affordance rather than browser history. Browser
     // goBack() can unwind past the workspace tab state (it landed on the Home
@@ -606,7 +631,7 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
     } else {
       await page.goBack();
     }
-    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(800); // settle (networkidle hangs on Prod background traffic)
 
     // Ensure we are back on the workspace controls view, then assert the filter
     // is retained (badge still "1").
@@ -918,22 +943,22 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
 
       // Click the chip to make it active and wait for the list to re-query.
       await chipLocator.click();
-      await page.waitForLoadState('networkidle');
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(800);
 
-      // Poll until BOTH the chip label count AND the visible row count agree.
-      // This handles the async count-query round-trip that fires after Apply.
+      // Poll until BOTH the chip label count AND the FULLY-scrolled row count
+      // agree. The list lazy-renders on scroll, so we must scroll to the end to
+      // materialise every matching control before counting.
       const result = await expect
         .poll(
           async () => {
             const labelCount = parseChipCount(await chipLocator.textContent());
-            const rowCount   = await controlRows(page).count();
+            const rowCount   = await countAllControlRows(page);
             // Return the agreed value when they match, or -1 to keep polling.
             return labelCount !== null && labelCount === rowCount ? labelCount : -1;
           },
           {
-            timeout: 15000,
-            message: `chip "${chip.label}" label count should equal its visible row count (PRJAT-1503)`,
+            timeout: 20000,
+            message: `chip "${chip.label}" label count should equal its fully-scrolled visible row count (PRJAT-1503)`,
           },
         )
         .toBeGreaterThanOrEqual(0)
@@ -941,7 +966,7 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
 
       // Final hard assertion: label == rows (belt-and-suspenders after poll).
       const labelCount = parseChipCount(await chipLocator.textContent());
-      const rowCount   = await controlRows(page).count();
+      const rowCount   = await countAllControlRows(page);
       expect(
         labelCount,
         `chip "${chip.label}" label count must not be null after filter`,
@@ -970,7 +995,7 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
       .first();
     if (await evidenceSubTab.isVisible({ timeout: 3000 }).catch(() => false)) {
       await evidenceSubTab.click();
-      await page.waitForLoadState('networkidle');
+      await page.waitForTimeout(800); // settle (networkidle hangs on Prod background traffic)
 
       // Return to Controls sub-tab.
       const controlsSubTab = page
@@ -979,7 +1004,7 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
         .first();
       if (await controlsSubTab.isVisible({ timeout: 3000 }).catch(() => false)) {
         await controlsSubTab.click();
-        await page.waitForLoadState('networkidle');
+        await page.waitForTimeout(800); // settle (networkidle hangs on Prod background traffic)
       }
 
       // Filter retained, search cleared (badge still "1").
@@ -1022,7 +1047,7 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
     await page.goto(`/audit/${auditId}?tab=ws&sub=controls&status=in_progress`, {
       waitUntil: 'domcontentloaded',
     });
-    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(800); // settle (networkidle hangs on Prod background traffic)
 
     // Filter button present and the seeded filter is active (badge "1").
     await expect(page.getByTestId('workspace-filter-btn')).toBeVisible({ timeout: 15000 });
@@ -1051,7 +1076,7 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
 
     // Full reload — sessionStorage persists for the tab.
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(800); // settle (networkidle hangs on Prod background traffic)
 
     // Re-enter the workspace controls view (reload lands on the audit page).
     await gotoWorkspaceControls(page);
@@ -1150,7 +1175,7 @@ test.describe('TG-7: Internal Audit — Filter per sub-tab', () => {
       return false;
     }
     await iaTab.click();
-    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(800); // settle (networkidle hangs on Prod background traffic)
     await page.waitForTimeout(800);
     return true;
   }
@@ -1164,7 +1189,7 @@ test.describe('TG-7: Internal Audit — Filter per sub-tab', () => {
       return false;
     }
     await target.click();
-    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(800); // settle (networkidle hangs on Prod background traffic)
     await page.waitForTimeout(500);
     return true;
   }
