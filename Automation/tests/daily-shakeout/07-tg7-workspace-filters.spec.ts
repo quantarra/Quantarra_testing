@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { shouldRun } from './excel-filter';
-import { getAdminSessionPath, getContributorSessionPath, checkGate } from './session-setup';
+import { getAdminSessionPath, getContributorSessionPath, checkGate, refreshAdminSession } from './session-setup';
+import * as fs from 'fs';
 
 /**
  * Daily Shakeout — TG-7: Audit Workspace & Internal Auditor — Filter per sub-tab
@@ -61,7 +62,44 @@ async function goHomeAndWaitForAudits(page: Page): Promise<void> {
   // until timeout even after the page is fully usable. Wait for the audit
   // tiles to render instead — that is the real "ready" signal.
   await page.goto('/', { waitUntil: 'domcontentloaded' });
-  await expect(page.locator('a[href*="/audit/"]').first()).toBeVisible({ timeout: 30000 });
+
+  // A long Prod run can expire the reused storageState server-side; home then
+  // redirects to /login and no audit tile appears. Detect + recover instead of
+  // a misleading 30s "tile not found" timeout.
+  await recoverIfLoggedOut(page);
+
+  const auditLink = page.locator('a[href*="/audit/"]').first();
+  const appeared = await auditLink.isVisible({ timeout: 15000 }).catch(() => false);
+
+  if (!appeared) {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await recoverIfLoggedOut(page);
+    await expect(auditLink).toBeVisible({ timeout: 20000 });
+  }
+}
+
+/**
+ * If the page is the login screen (expired shared session), refresh the admin
+ * session, inject the fresh cookies into this context, and reload home.
+ */
+async function recoverIfLoggedOut(page: Page): Promise<void> {
+  const onLogin =
+    /\/login/.test(page.url()) ||
+    (await page.locator('input[type="password"]').first().isVisible({ timeout: 2000 }).catch(() => false));
+
+  if (!onLogin) {
+    return;
+  }
+
+  console.log('  🔄 Home redirected to /login — session expired mid-run. Re-authenticating...');
+  const sessionPath = await refreshAdminSession();
+  const state = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
+
+  if (Array.isArray(state.cookies) && state.cookies.length > 0) {
+    await page.context().addCookies(state.cookies);
+  }
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
 }
 
 /**

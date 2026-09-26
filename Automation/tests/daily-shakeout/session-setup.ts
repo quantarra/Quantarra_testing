@@ -19,7 +19,12 @@ import { getShakeoutAdmin, getShakeoutContributor, type ShakeoutCredential } fro
 import { getEnvConfig } from '../../src/config/environment';
 
 const SESSION_DIR = path.resolve(__dirname, '../../.auth');
-const MAX_SESSION_AGE = 10 * 60 * 1000; // 10 minutes
+// Session cache age. A full Prod shakeout (all TG groups, retries=1, slow
+// background traffic) can run well beyond 10 min; a 10-min cache aged out
+// mid-suite and later tests hit a server-expired session → home redirected to
+// /login → "audit tile not found" false failures (TG-6 TC-17/TC-20, TG-7
+// TC-5/6/11b/12). 45 min comfortably covers a full run.
+const MAX_SESSION_AGE = 45 * 60 * 1000; // 45 minutes
 const GATE_FILE = path.join(SESSION_DIR, 'gate-failed.json');
 
 export function getAdminSessionPath(): string {
@@ -187,7 +192,7 @@ export async function ensureAdminSession(): Promise<void> {
   clearGateFile();
 
   if (isSessionFresh(sessionPath)) {
-    console.log('  ♻️  Reusing Admin session (< 10 min old)');
+    console.log('  ♻️  Reusing Admin session (fresh)');
     return;
   }
 
@@ -204,6 +209,19 @@ export async function ensureAdminSession(): Promise<void> {
     fs.writeFileSync(sessionPath, JSON.stringify({ cookies: [], origins: [] }));
     throw err; // Let the setup test itself fail (marks it in results)
   }
+}
+
+/**
+ * Force a fresh admin login regardless of cache age, and return the session
+ * path. Used by tests to recover mid-run when the reused storageState has
+ * expired server-side (home page redirects to /login → no audit tiles). Does
+ * NOT touch the gate file — this is a recovery path, not initial setup.
+ */
+export async function refreshAdminSession(): Promise<string> {
+  const sessionPath = getAdminSessionPath();
+  console.log('  🔄 Refreshing Admin session (previous one expired mid-run)...');
+  await loginAndSave(getShakeoutAdmin(), sessionPath);
+  return sessionPath;
 }
 
 /**
