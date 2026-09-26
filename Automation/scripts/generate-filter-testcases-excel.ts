@@ -176,7 +176,7 @@ const detailRows: DetailRow[] = [
 
 // ── Regression-sheet rows (shouldRun() compatible) ──────────────────────────
 // Loader reads: 'Test group', 'Test scenario/Test case/Test step', 'Test case',
-// 'Run Shakeout in Prod and POC', 'Run for Full regression'.
+// 'Run for Smoketest in prod', 'Run for Smoketest in POC', 'Run for Full regression'.
 // A scenario header row uses "Scenario N" in the 'Test case' column; each TC row
 // carries the TG + scenario + TC-id.
 const REG_TG = 'TG-8';
@@ -210,22 +210,24 @@ async function generate(): Promise<void> {
     { header: 'Test group', key: 'tg', width: 12 },
     { header: 'Test scenario/Test case/Test step', key: 'desc', width: 70 },
     { header: 'Test case', key: 'tc', width: 14 },
-    { header: 'Run Shakeout in Prod and POC', key: 'shakeout', width: 26 },
+    { header: 'Run for Smoketest in prod', key: 'smokeProd', width: 24 },
+    { header: 'Run for Smoketest in POC', key: 'smokePoc', width: 24 },
     { header: 'Run for Full regression', key: 'regression', width: 22 },
   ];
   styleHeader(reg);
   // Scenario header row
   reg.addRow({
     tg: '', desc: 'Audit Workspace & Internal Auditor — Filter per sub-tab',
-    tc: REG_SCENARIO, shakeout: '', regression: '',
+    tc: REG_SCENARIO, smokeProd: '', smokePoc: '', regression: '',
   });
   detailRows.forEach((r) => {
     reg.addRow({
       tg: REG_TG,
       desc: `${r.suite} — ${r.testCase}`,
       tc: r.tc,
-      // Feature not yet on Prod → shakeout No; enable regression by default.
-      shakeout: 'No',
+      // Feature not yet on Prod or POC → smoke No; enable regression by default.
+      smokeProd: 'No',
+      smokePoc: 'No',
       regression: 'Yes',
     });
   });

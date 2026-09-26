@@ -19,9 +19,9 @@ import { getAdminSessionPath, getContributorSessionPath, checkGate } from './ses
  *  - Search / Filters / Add Control layout swap (new design).
  *  - Cross-audit isolation + keyboard/a11y.
  *
- * Feature flags: all TG-7 rows are "Run Shakeout in Prod and POC" = No
- * (regression-only until the feature ships to Prod). Each test is gated by
- * shouldRun('TG-7','Scenario 7','TC-N').
+ * Feature flags: all TG-7 rows are "Run for Smoketest in prod" = No and
+ * "Run for Smoketest in POC" = No (regression-only until the feature ships).
+ * Each test is gated by shouldRun('TG-7','Scenario 7','TC-N').
  *
  * Session strategy: reuse storageState created by 00-auth-setup (admin +
  * contributor). The Internal Auditor sub-tab tests reuse the admin session

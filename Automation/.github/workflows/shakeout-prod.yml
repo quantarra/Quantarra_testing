@@ -1,0 +1,48 @@
+name: Shakeout - Prod (Reusable)
+
+# Reusable entrypoint for the Prod daily/post-deploy shakeout.
+#
+# Invoked by project-atlas:
+#   - .github/workflows/qa-shakeout-prod.yml  → after a successful "CD — Production" deploy
+#   - a daily cron (05:00 UTC) in the same caller
+#   via:  uses: quantarra/Quantarra_testing/.github/workflows/shakeout-prod.yml@main
+#          secrets: inherit
+#
+# This is a thin wrapper: it delegates to qa-automation.yml (the full-featured
+# suite) pinned to ENV=prod and the Excel-driven Daily Shakeout scenario.
+# Prod test-case selection is controlled by the "Run for Smoketest in prod"
+# column in tests/New_Testcase.xlsx (ENV=prod → that column; POC uses
+# "Run for Smoketest in POC").
+
+on:
+  # Called from project-atlas (secrets: inherit passes the shakeout secrets through).
+  workflow_call:
+    secrets:
+      ADMIN_PASSWORD:
+        required: false
+      CONTRIBUTOR_PASSWORD:
+        required: false
+      MC_ADMIN_PASSWORD:
+        required: false
+      JIRA_API_TOKEN:
+        required: false
+
+  # Manual escape hatch — run the Prod shakeout on demand from this repo's Actions tab.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prod-shakeout:
+    name: Prod Shakeout (Excel-driven)
+    uses: ./.github/workflows/qa-automation.yml
+    with:
+      environment: prod
+      scenario: 'Daily Shakeout (Excel-driven)'
+      framework: 'N/A'
+    secrets:
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+      CONTRIBUTOR_PASSWORD: ${{ secrets.CONTRIBUTOR_PASSWORD }}
+      MC_ADMIN_PASSWORD: ${{ secrets.MC_ADMIN_PASSWORD }}
+      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}

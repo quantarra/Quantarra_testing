@@ -12,7 +12,7 @@ import { shouldRun, printFilterSummary } from './excel-filter';
  * 3. Auth API rejects invalid credentials (401)
  * 4. Health endpoint responds
  *
- * Excel-driven: reads "Run Shakeout in Prod and POC" column to decide execution.
+ * Excel-driven: reads "Run for Smoketest in prod" (Prod) / "Run for Smoketest in POC" (POC/staging) column to decide execution.
  */
 
 const envConfig = getEnvConfig();
