@@ -186,22 +186,30 @@ function controlRows(page: Page) {
 /**
  * The workspace control list renders ALL matching controls, but lazily — rows
  * are added to the DOM as you scroll. A plain controlRows().count() therefore
- * only sees the first screenful. This scrolls the last row into view repeatedly
- * until the row count stops growing (fully loaded), then returns the final
- * count. Bounded so it can never hang.
+ * only sees the first screenful. This scrolls the last row into view until the
+ * count stops growing (fully loaded), then returns the final count.
+ *
+ * Perf: pass `expected` (the chip's (N) label) so we can stop the instant the
+ * rendered count reaches it — most chips are small and this returns after 0–1
+ * scrolls. Bounded so it can never hang.
  */
-async function countAllControlRows(page: Page): Promise<number> {
+async function countAllControlRows(page: Page, expected?: number | null): Promise<number> {
   const rows = controlRows(page);
   let prev = -1;
   let current = await rows.count();
-  const MAX_SCROLLS = 40;
+  const MAX_SCROLLS = 15;
 
   for (let i = 0; i < MAX_SCROLLS && current !== prev; i++) {
+    // Already reached the expected total — no need to scroll further.
+    if (expected != null && current >= expected) {
+      break;
+    }
+
     prev = current;
     await rows.last().scrollIntoViewIfNeeded().catch(() => {});
     // Brief settle for the next lazy batch to attach. No networkidle (hangs on
     // Prod background traffic).
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(150);
     current = await rows.count();
   }
 
@@ -952,7 +960,7 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
         .poll(
           async () => {
             const labelCount = parseChipCount(await chipLocator.textContent());
-            const rowCount   = await countAllControlRows(page);
+            const rowCount   = await countAllControlRows(page, labelCount);
             // Return the agreed value when they match, or -1 to keep polling.
             return labelCount !== null && labelCount === rowCount ? labelCount : -1;
           },
@@ -966,7 +974,7 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
 
       // Final hard assertion: label == rows (belt-and-suspenders after poll).
       const labelCount = parseChipCount(await chipLocator.textContent());
-      const rowCount   = await countAllControlRows(page);
+      const rowCount   = await countAllControlRows(page, labelCount);
       expect(
         labelCount,
         `chip "${chip.label}" label count must not be null after filter`,
