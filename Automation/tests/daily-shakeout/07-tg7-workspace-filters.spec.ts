@@ -1259,12 +1259,11 @@ test.describe('TG-7: Internal Audit — Filter per sub-tab', () => {
   test('TC-11b: IA filter button shows an active-filter count badge (PRJAT-1260)', async ({ page }) => {
     test.skip(!shouldRun('TG-7', 'Scenario 7', 'TC-11'), 'Excluded by Excel — Run Shakeout = No');
 
-    // KNOWN BUG PRJAT-1260: the Internal Audit filter button does NOT render an
-    // active-filter count badge (the Audit Workspace filter does). Marked as
-    // expected-to-fail so the suite stays green while tracking the bug — when
-    // this test starts PASSING, the bug is fixed and test.fail() should be
-    // removed. See https://quantarra.atlassian.net/browse/PRJAT-1260
-    test.fail(true, 'PRJAT-1260: IA filter button missing active-filter badge');
+    // PRJAT-1260 (FIXED 2026-09-28): the Internal Audit filter button now renders
+    // an active-filter count badge after a filter is applied (matching the Audit
+    // Workspace filter). This test asserts that behaviour as a normal pass. If the
+    // badge regresses, this test fails — that is the intended regression guard.
+    // See https://quantarra.atlassian.net/browse/PRJAT-1260
 
     // Target an audit known to have Internal Audit activity. Most audits have
     // empty IA sub-tabs; "Sour Pickles" (staging) has controls in "Ready for
@@ -1292,10 +1291,8 @@ test.describe('TG-7: Internal Audit — Filter per sub-tab', () => {
     const applied = await applyFirstOwner(page);
     expect(applied, 'IA filter drawer had no applicable option to select').not.toBeNull();
 
-    // KNOWN BUG PRJAT-1260: the Internal Audit filter button does NOT render an
-    // active-filter count badge (the Audit Workspace filter does). This test
-    // asserts the CORRECT behaviour — a numeric badge on the IA Filter button
-    // after applying a filter — so it fails until PRJAT-1260 is fixed.
+    // PRJAT-1260 (FIXED): the Internal Audit filter button renders a numeric
+    // active-filter count badge after a filter is applied. Assert it is visible.
     const iaFilterBtn = page.getByRole('button', { name: /open filters/i }).first();
     const badgeOnBtn = iaFilterBtn.locator('text=/^\\d+$/').first();
     await expect(
