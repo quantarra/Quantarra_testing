@@ -186,22 +186,30 @@ function controlRows(page: Page) {
 /**
  * The workspace control list renders ALL matching controls, but lazily — rows
  * are added to the DOM as you scroll. A plain controlRows().count() therefore
- * only sees the first screenful. This scrolls the last row into view repeatedly
- * until the row count stops growing (fully loaded), then returns the final
- * count. Bounded so it can never hang.
+ * only sees the first screenful. This scrolls the last row into view until the
+ * count stops growing (fully loaded), then returns the final count.
+ *
+ * Perf: pass `expected` (the chip's (N) label) so we can stop the instant the
+ * rendered count reaches it — most chips are small and this returns after 0–1
+ * scrolls. Bounded so it can never hang.
  */
-async function countAllControlRows(page: Page): Promise<number> {
+async function countAllControlRows(page: Page, expected?: number | null): Promise<number> {
   const rows = controlRows(page);
   let prev = -1;
   let current = await rows.count();
-  const MAX_SCROLLS = 40;
+  const MAX_SCROLLS = 15;
 
   for (let i = 0; i < MAX_SCROLLS && current !== prev; i++) {
+    // Already reached the expected total — no need to scroll further.
+    if (expected != null && current >= expected) {
+      break;
+    }
+
     prev = current;
     await rows.last().scrollIntoViewIfNeeded().catch(() => {});
     // Brief settle for the next lazy batch to attach. No networkidle (hangs on
     // Prod background traffic).
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(150);
     current = await rows.count();
   }
 
@@ -952,7 +960,7 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
         .poll(
           async () => {
             const labelCount = parseChipCount(await chipLocator.textContent());
-            const rowCount   = await countAllControlRows(page);
+            const rowCount   = await countAllControlRows(page, labelCount);
             // Return the agreed value when they match, or -1 to keep polling.
             return labelCount !== null && labelCount === rowCount ? labelCount : -1;
           },
@@ -966,7 +974,7 @@ test.describe('TG-7: Audit Workspace — Filter per sub-tab', () => {
 
       // Final hard assertion: label == rows (belt-and-suspenders after poll).
       const labelCount = parseChipCount(await chipLocator.textContent());
-      const rowCount   = await countAllControlRows(page);
+      const rowCount   = await countAllControlRows(page, labelCount);
       expect(
         labelCount,
         `chip "${chip.label}" label count must not be null after filter`,
@@ -1251,12 +1259,11 @@ test.describe('TG-7: Internal Audit — Filter per sub-tab', () => {
   test('TC-11b: IA filter button shows an active-filter count badge (PRJAT-1260)', async ({ page }) => {
     test.skip(!shouldRun('TG-7', 'Scenario 7', 'TC-11'), 'Excluded by Excel — Run Shakeout = No');
 
-    // KNOWN BUG PRJAT-1260: the Internal Audit filter button does NOT render an
-    // active-filter count badge (the Audit Workspace filter does). Marked as
-    // expected-to-fail so the suite stays green while tracking the bug — when
-    // this test starts PASSING, the bug is fixed and test.fail() should be
-    // removed. See https://quantarra.atlassian.net/browse/PRJAT-1260
-    test.fail(true, 'PRJAT-1260: IA filter button missing active-filter badge');
+    // PRJAT-1260 (FIXED 2026-09-28): the Internal Audit filter button now renders
+    // an active-filter count badge after a filter is applied (matching the Audit
+    // Workspace filter). This test asserts that behaviour as a normal pass. If the
+    // badge regresses, this test fails — that is the intended regression guard.
+    // See https://quantarra.atlassian.net/browse/PRJAT-1260
 
     // Target an audit known to have Internal Audit activity. Most audits have
     // empty IA sub-tabs; "Sour Pickles" (staging) has controls in "Ready for
@@ -1284,10 +1291,8 @@ test.describe('TG-7: Internal Audit — Filter per sub-tab', () => {
     const applied = await applyFirstOwner(page);
     expect(applied, 'IA filter drawer had no applicable option to select').not.toBeNull();
 
-    // KNOWN BUG PRJAT-1260: the Internal Audit filter button does NOT render an
-    // active-filter count badge (the Audit Workspace filter does). This test
-    // asserts the CORRECT behaviour — a numeric badge on the IA Filter button
-    // after applying a filter — so it fails until PRJAT-1260 is fixed.
+    // PRJAT-1260 (FIXED): the Internal Audit filter button renders a numeric
+    // active-filter count badge after a filter is applied. Assert it is visible.
     const iaFilterBtn = page.getByRole('button', { name: /open filters/i }).first();
     const badgeOnBtn = iaFilterBtn.locator('text=/^\\d+$/').first();
     await expect(
